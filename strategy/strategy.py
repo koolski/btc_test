@@ -126,10 +126,10 @@ class StatisticalArbitrageBacktest:
 
         if self.exchange_1_position != 0:
             last_bid_price_1 = get_last_price(
-                latency_adjusted_df, BidAskSide.bid, f"price_{exchange_1}_latency"
+                latency_adjusted_df, BidAskSide.bid, f"price_{exchange_1}"
             )
             last_ask_price_1 = get_last_price(
-                latency_adjusted_df, BidAskSide.ask, f"price_{exchange_1}_latency"
+                latency_adjusted_df, BidAskSide.ask, f"price_{exchange_1}"
             )
 
             if self.exchange_1_position > 0:
@@ -155,10 +155,10 @@ class StatisticalArbitrageBacktest:
 
         if self.exchange_2_position != 0:
             last_bid_price_2 = get_last_price(
-                latency_adjusted_df, BidAskSide.bid, f"price_{exchange_2}_latency"
+                latency_adjusted_df, BidAskSide.bid, f"price_{exchange_2}"
             )
             last_ask_price_2 = get_last_price(
-                latency_adjusted_df, BidAskSide.ask, f"price_{exchange_2}_latency"
+                latency_adjusted_df, BidAskSide.ask, f"price_{exchange_2}"
             )
 
             if self.exchange_2_position > 0:
@@ -203,9 +203,15 @@ class StatisticalArbitrageBacktest:
             self.unified_orderbook["timestamp_ms"] + self.latency_ms
         )
 
-        latency_adjusted_df = pd.merge_asof(
-                self.unified_orderbook,
-                self.unified_orderbook,
+        num_batches = (len(self.unified_orderbook) + batch_size - 1) // batch_size
+        logger.info(f"Processing orderbook data in {num_batches} batches...")
+
+        for batch_start in range(0, len(self.unified_orderbook), batch_size):
+            batch = self.unified_orderbook.iloc[batch_start : batch_start + batch_size]
+
+            latency_adjusted_df = pd.merge_asof(
+                batch,
+                batch,
                 left_on="effective_timestamp_ms",
                 right_on="timestamp_ms",
                 suffixes=("", "_latency"),
@@ -214,33 +220,27 @@ class StatisticalArbitrageBacktest:
                 subset=[f"price_{exchange_1}_latency", f"price_{exchange_2}_latency"]
             )
 
-        # Calculate price spread
-        latency_adjusted_df["spread"] = latency_adjusted_df.apply(
-            lambda row: (
-                row[f"price_{exchange_2}_latency"]
-                - row[f"price_{exchange_1}_latency"]
-                if row["side"] == BidAskSide.bid
-                else row[f"price_{exchange_1}_latency"]
-                     - row[f"price_{exchange_2}_latency"]
-            ),
-            axis=1,
-        )
+            # Calculate price spread
+            latency_adjusted_df["spread"] = latency_adjusted_df.apply(
+                lambda row: (
+                    row[f"price_{exchange_2}_latency"]
+                    - row[f"price_{exchange_1}_latency"]
+                    if row["side"] == BidAskSide.bid
+                    else row[f"price_{exchange_1}_latency"]
+                    - row[f"price_{exchange_2}_latency"]
+                ),
+                axis=1,
+            )
 
-        # Calculate spread mean and std based on rolling window
-        latency_adjusted_df["spread_mean"] = (
-            latency_adjusted_df["spread"].rolling(window=10).mean()
-        )
-        latency_adjusted_df["spread_std"] = (
-            latency_adjusted_df["spread"].rolling(window=10).std()
-        )
+            # Calculate spread mean and std based on rolling window
+            latency_adjusted_df["spread_mean"] = (
+                latency_adjusted_df["spread"].rolling(window=10).mean()
+            )
+            latency_adjusted_df["spread_std"] = (
+                latency_adjusted_df["spread"].rolling(window=10).std()
+            )
 
-        num_batches = (len(latency_adjusted_df) + batch_size - 1) // batch_size
-        logger.info(f"Processing orderbook data in {num_batches} batches...")
-
-        for batch_start in range(0, len(latency_adjusted_df), batch_size):
-            batch = latency_adjusted_df.iloc[batch_start: batch_start + batch_size]
-
-            for _, row in batch.iterrows():
+            for _, row in latency_adjusted_df.iterrows():
                 if pd.isna(row["spread_mean"]) or pd.isna(row["spread_std"]):
                     continue
 
